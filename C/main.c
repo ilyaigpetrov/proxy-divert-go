@@ -1,6 +1,7 @@
 #include "windivert.h"
 #include <stdio.h>
 #include <signal.h>
+#include <winsock2.h>
 
 #define MAX_PACKET_SIZE 9016
 
@@ -14,7 +15,7 @@
 
 HANDLE handle;
 
-static void sigint_handler(int sig __attribute__((unused))) {
+static void sigintHandler(int sig __attribute__((unused))) {
     WinDivertClose(handle);
     exit(EXIT_SUCCESS);
 }
@@ -23,15 +24,18 @@ int main(int argc, char *argv[]) {
 
     WINDIVERT_ADDRESS addr;
     char packet[MAX_PACKET_SIZE];
+    PVOID packetData;
     UINT packetLen;
+    UINT packetDataLen;
+    PWINDIVERT_IPHDR ppIpHdr;
 
-    char* filter = "inbound and ip and tcp and "
+    char* filter = "outbound and ip and tcp and "
         "(tcp.DstPort == 443 or tcp.DstPort == 80) and "
         DIVERT_NO_LOCALNETS_DST;
 
-    signal(SIGINT, sigint_handler);
+    signal(SIGINT, sigintHandler);
 
-    handle = WinDivertOpen(filter,  WINDIVERT_LAYER_NETWORK, -1000, 0);
+    handle = WinDivertOpen(filter, WINDIVERT_LAYER_NETWORK, 0, 0);
     if (handle == INVALID_HANDLE_VALUE)
     {
         LPTSTR errormessage = NULL;
@@ -50,7 +54,28 @@ int main(int argc, char *argv[]) {
         if (!WinDivertRecv(handle, packet, sizeof(packet), &addr, &packetLen))
         {
             printf("Receive error!");
-            continue;
+        }
+
+        if (WinDivertHelperParsePacket(packet, packetLen, &ppIpHdr,
+                NULL, NULL, NULL, NULL, NULL, &packetData, &packetDataLen)) {
+
+            UINT32 dst = ppIpHdr->DstAddr;
+            struct in_addr dstAddr = (struct in_addr){ .s_addr = dst };
+            struct sockaddr_in sin;
+            sin.sin_family = AF_INET;
+            sin.sin_addr = dstAddr;
+
+            printf("Wants %s\n", inet_ntoa(dstAddr));
+
+            /*
+            int s = socket (AF_INET, SOCK_RAW, IPPROTO_RAW);
+            int code = sendto (s, packet, packetLen, 0, (struct sockaddr*)&sin, sizeof (sin));
+            if (code < 0) {
+              perror("Failed to send");
+            } else {
+              puts("Sent IPV4");
+            }
+            */
         }
 
         // Modify packet.
