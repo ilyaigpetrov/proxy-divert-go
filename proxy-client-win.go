@@ -89,6 +89,27 @@ func (p *Proxy) run(listener net.TCPListener) {
   }
 }
 
+func isLocalIP(ip string) bool {
+    if strings.HasPrefix(ip, "127.0.0.") || ip == "0.0.0.0" {
+      return true
+    }
+    addrs, err := net.InterfaceAddrs()
+    if err != nil {
+        return ""
+    }
+    for _, address := range addrs {
+        // check the address type and if it is not a loopback the display it
+        if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+            if ipnet.IP.To4() != nil {
+              if ip == ipnet.IP.String() {
+                return true
+              }
+            }
+        }
+    }
+    return false
+}
+
 func (p *Proxy) handle(connection net.TCPConn) {
 
   defer connection.Close()
@@ -126,9 +147,8 @@ func (p *Proxy) handle(connection net.TCPConn) {
     buf = buf[header.TotalLen:]
 
     fmt.Printf("Packet to %s\n", header.Dst)
-    //fmt.Println(hex.Dump(packetData))
 
-    var src, dst string
+    var src, dst, srcIP, dstIP string
 
     packet := gopacket.NewPacket(packetData, layers.LayerTypeIPv4, gopacket.Default)
     ipLayer := packet.Layer(layers.LayerTypeIPv4)
@@ -138,6 +158,8 @@ func (p *Proxy) handle(connection net.TCPConn) {
 
         src = ip.SrcIP.String()
         dst = ip.DstIP.String()
+        srcIP = src
+        dstIP = dst
     } else {
       fmt.Println("No IP layer!")
       continue
@@ -153,33 +175,36 @@ func (p *Proxy) handle(connection net.TCPConn) {
     }
     fmt.Printf("From %s to %s\n", src, dst)
 
+    if isLocalIP(dstIP) {
+      fmt.Printf("DESTINATION IS SELF: %s\n", dest)
+      continue // NO SELF CONNECTIONS
+    }
+
+    addr, err := net.ResolveTCPAddr("tcp", dest)
+    if err != nil {
+      panic(err)
+    }
+    fmt.Printf("Connection to %s\n", dest)
+    remote, err := net.DialTCP("tcp", nil, addr)
+    if err != nil {
+      p.log.WithField("err", err).Errorln("Error dialing remote host")
+      return
+    }
+    defer remote.Close()
+    wg := &sync.WaitGroup{}
+    wg.Add(2)
+    go p.copy(*remote, connection, wg)
+    go p.copy(connection, *remote, wg)
+    wg.Wait()
+
+
   }
 
 
   /*
 
   dest := ipv4 + ":" + fmt.Sprintf("%d", port)
-  if dest == *remoteAddr || dest == strings.Replace(*remoteAddr, "0.0.0.0", "127.0.0.1", -1) {
-    fmt.Printf("DESTINATION IS SELF: %s", dest)
-    return // NO SELF CONNECTIONS
-  }
 
-  addr, err := net.ResolveTCPAddr("tcp", dest)
-  if err != nil {
-    panic(err)
-  }
-  fmt.Printf("Connection to %s\n", dest)
-  remote, err := net.DialTCP("tcp", nil, addr)
-  if err != nil {
-    p.log.WithField("err", err).Errorln("Error dialing remote host")
-    return
-  }
-  defer remote.Close()
-  wg := &sync.WaitGroup{}
-  wg.Add(2)
-  go p.copy(*remote, connection, wg)
-  go p.copy(connection, *remote, wg)
-  wg.Wait()
   */
 
 }
