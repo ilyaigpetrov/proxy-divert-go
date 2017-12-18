@@ -9,6 +9,7 @@ import (
   "net"
   "os/signal"
   "github.com/clmul/go-windivert"
+  "golang.org/x/sys/windows"
   "github.com/google/gopacket"
   "github.com/google/gopacket/layers"
 )
@@ -82,19 +83,19 @@ func main() {
   serverPort := fmt.Sprintf("%d", tcpAddr.Port)
   fmt.Printf("Server addr is %s:%s\n", serverIp, serverPort)
 
-  filter := "outbound and ip and and tcp and (tcp.DstPort == 443 or tcp.DstPort == 80) and " +
-    "(ip.DstAddr != " + serverIp + " and tcp.DstPort == " + serverPort + ") and " +
+  filter := "outbound and ip and tcp and (tcp.DstPort == 443 or tcp.DstPort == 80) and " +
+    "(ip.DstAddr != " + serverIp + " and tcp.DstPort != " + serverPort + ") and " +
     DIVERT_NO_LOCALNETS_DST;
 
   serverPoint := fmt.Sprintf("%s:%d", serverIp, tcpAddr.Port)
   go keepConnectedTo(serverPoint)
 
-  select{}
-
   handle, err := windivert.Open(filter, windivert.LayerNetwork, 0, 0)
   if err != nil {
     Error.Fatal(err)
   }
+
+  fmt.Println("Traffic diverted.")
 
   controlC := make(chan os.Signal)
   signal.Notify(controlC, os.Interrupt)
@@ -106,15 +107,15 @@ func main() {
   }()
 
   maxPacketSize := 9016
-  data := make([]byte, maxPacketSize)
+  packetData := make([]byte, maxPacketSize)
   for {
-    _, _, err := handle.Recv(data)
+    _, _, err := handle.Recv(packetData)
     if err != nil {
       Error.Println(err)
       continue
     }
 
-    packet := gopacket.NewPacket(data, layers.LayerTypeIPv4, gopacket.Default)
+    packet := gopacket.NewPacket(packetData, layers.LayerTypeIPv4, gopacket.Default)
     ipLayer := packet.Layer(layers.LayerTypeIPv4)
     if ipLayer != nil {
         fmt.Println("IPv4 layer detected.")
@@ -127,8 +128,27 @@ func main() {
         // Checksum, SrcIP, DstIP
         fmt.Printf("From %s to %s\n", ip.SrcIP, ip.DstIP)
         fmt.Println("Protocol: ", ip.Protocol)
-        fmt.Println()
+    } else {
+      Error.Println("No IP layer!")
+      continue
     }
+
+    s, err := windows.Socket(windows.AF_INET, windows.SOCK_RAW, windows.IPPROTO_TCP)
+    if err != nil {
+      Error.Println(err)
+      continue
+    }
+
+    var arr [4]byte
+    copy(arr[:], tcpAddr.IP.To4()[:4])
+    addr := windows.SockaddrInet4{
+      Addr: arr,
+    }
+
+    //addr := ip2int(header.Dst)
+
+    //sin.sin_addr = C.struct_in_addr{ s_addr: addr }
+    windows.Sendto (s, packetData, 0, &addr)
 
   }
 

@@ -2,6 +2,12 @@
 
 
 [[projects]]
+  name = "github.com/Sirupsen/logrus"
+  packages = ["."]
+  revision = "d682213848ed68c0a260ca37d6dd5ace8423f5ba"
+  version = "v1.0.4"
+
+[[projects]]
   branch = "master"
   name = "github.com/clmul/go-windivert"
   packages = ["."]
@@ -15,13 +21,19 @@
 
 [[projects]]
   branch = "master"
+  name = "golang.org/x/crypto"
+  packages = ["ssh/terminal"]
+  revision = "94eea52f7b742c7cbe0b03b22f0c4c8631ece122"
+
+[[projects]]
+  branch = "master"
   name = "golang.org/x/sys"
-  packages = ["windows"]
+  packages = ["unix","windows"]
   revision = "571f7bbbe08da2a8955aed9d4db316e78630e9a3"
 
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "e783973289df2608c1b75d23ea2b8aab7bb25e37536631c4099ddc3fce520cc3"
+  inputs-digest = "067cf76ac5a6ae94d296629597bb7fa50b73ab6b67df2205a5f222e9260ada24"
   solver-name = "gps-cdcl"
   solver-version = 1
