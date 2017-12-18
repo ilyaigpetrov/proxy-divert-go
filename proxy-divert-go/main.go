@@ -22,7 +22,7 @@ var DIVERT_NO_LOCALNETS_DST = `(
 )`
 
 var remote net.Conn
-var isDisconnected = make(chan struct{}, 1)
+var isDisconnected = make(chan struct{})
 
 func connectTo(serverPoint string) (ifConnected bool) {
 
@@ -42,17 +42,17 @@ func keepConnectedTo(serverPoint string) {
 
   if connectTo(serverPoint) == false {
     //Error.Fatal("Failed to stick to this server.")
-    isDisconnected <- struct{}{}
   }
   for _ = range isDisconnected {
     if remote != nil {
       remote.Close()
     }
-    ok := connectTo(serverPoint)
-    if !ok {
-      fmt.Println("Reconnect in 5 seconds")
-      time.Sleep(time.Second * 5)
-      isDisconnected <- struct{}{}
+    for {
+      ok := connectTo(serverPoint)
+      if !ok {
+        fmt.Println("Reconnect in 5 seconds")
+        time.Sleep(time.Second * 5)
+      }
     }
   }
 
@@ -79,14 +79,16 @@ func main() {
   }
 
   serverIp := tcpAddr.IP.String()
-  fmt.Printf("Server ip is %s\n", serverIp)
+  serverPort := fmt.Sprintf("%d", tcpAddr.Port)
+  fmt.Printf("Server addr is %s:%s\n", serverIp, serverPort)
 
   filter := "outbound and ip and and tcp and (tcp.DstPort == 443 or tcp.DstPort == 80) and " +
-    "(ip.DstAddr != " + serverIp + ") and " +
+    "(ip.DstAddr != " + serverIp + " and tcp.DstPort == " + serverPort + ") and " +
     DIVERT_NO_LOCALNETS_DST;
 
   serverPoint := fmt.Sprintf("%s:%d", serverIp, tcpAddr.Port)
   go keepConnectedTo(serverPoint)
+
   select{}
 
   handle, err := windivert.Open(filter, windivert.LayerNetwork, 0, 0)
