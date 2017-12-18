@@ -6,6 +6,7 @@ import (
   "fmt"
   "errors"
   "github.com/clmul/go-windivert"
+  "experimental/nettest"
 )
 
 var DIVERT_NO_LOCALNETS_DST = `(
@@ -16,21 +17,46 @@ var DIVERT_NO_LOCALNETS_DST = `(
   (ip.DstAddr < 169.254.0.0 or ip.DstAddr > 169.254.255.255)
 )`
 
-func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (func(), error) {
+var theInterface *net.Interface
 
-  nop := func() {}
+func CreatePacketInjector() (func([]byte) error, error) {
+
+  handle, err := windivert.Open("false", windivert.LayerNetwork, 0, 0)
+  if err != nil {
+    return nil, err
+  }
+
+  if theInterface == nil {
+    rif := nettest.RoutedInterface("ip", net.FlagUp)
+    if rif == nil {
+      return nil, errors.New("No interface found for injecting packets.")
+    }
+    theInterface = rif
+  }
+
+  addr := windivert.Address{ Direction: windivert.DirectionInbound, IfIdx: uint32(theInterface.Index) }
+  return func(packetData []byte) error {
+
+    _, err = handle.Send(packetData, addr)
+    return err
+
+  }, nil
+
+}
+
+func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (func(), error) {
 
   filters := make([]string, 0, len(exceptions))
   for _, addr := range exceptions {
     parts := strings.Split(addr, ":")
     if len(parts) != 2 {
-      return nop, errors.New(fmt.Sprintf(`"%s" must be in format hostname:port`, addr))
+      return nil, errors.New(fmt.Sprintf(`"%s" must be in format hostname:port`, addr))
     }
     port := parts[1]
     portless := parts[0]
     ips, err := net.LookupHost(portless)
     if err != nil {
-      return nop, err
+      return nil, err
     }
     ors := make([]string, 0, len(ips))
     for _, ip := range ips {
@@ -47,7 +73,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
 
   handle, err := windivert.Open(filter, windivert.LayerNetwork, 0, 0)
   if err != nil {
-    return nop, err
+    return nil, err
   }
 
   maxPacketSize := 9016
