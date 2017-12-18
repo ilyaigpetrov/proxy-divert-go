@@ -2,10 +2,13 @@ package main
 
 import (
   "io"
+  "io/ioutil"
   "net"
   "sync"
   "fmt"
   "flag"
+  "strings"
+  "bytes"
   "golang.org/x/net/ipv4"
   //"encoding/hex"
   "os"
@@ -95,7 +98,7 @@ func isLocalIP(ip string) bool {
     }
     addrs, err := net.InterfaceAddrs()
     if err != nil {
-        return ""
+        return false
     }
     for _, address := range addrs {
         // check the address type and if it is not a loopback the display it
@@ -165,7 +168,8 @@ func (p *Proxy) handle(connection net.TCPConn) {
       continue
     }
 
-    if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
+    tcpLayer := packet.Layer(layers.LayerTypeTCP)
+    if tcpLayer != nil {
         tcp, _ := tcpLayer.(*layers.TCP)
         dst = fmt.Sprintf("%s:%d", dst, tcp.DstPort)
         src = fmt.Sprintf("%s:%d", src, tcp.SrcPort)
@@ -176,36 +180,38 @@ func (p *Proxy) handle(connection net.TCPConn) {
     fmt.Printf("From %s to %s\n", src, dst)
 
     if isLocalIP(dstIP) {
-      fmt.Printf("DESTINATION IS SELF: %s\n", dest)
+      fmt.Printf("DESTINATION IS SELF: %s\n", dstIP)
       continue // NO SELF CONNECTIONS
     }
 
-    addr, err := net.ResolveTCPAddr("tcp", dest)
+    addr, err := net.ResolveTCPAddr("tcp", dst)
     if err != nil {
-      panic(err)
+      p.log.Errorln(err)
+      continue
     }
-    fmt.Printf("Connection to %s\n", dest)
+    fmt.Printf("Connection to %s\n", dst)
     remote, err := net.DialTCP("tcp", nil, addr)
     if err != nil {
       p.log.WithField("err", err).Errorln("Error dialing remote host")
-      return
+      continue
     }
     defer remote.Close()
     wg := &sync.WaitGroup{}
     wg.Add(2)
-    go p.copy(*remote, connection, wg)
-    go p.copy(connection, *remote, wg)
+    go func() {
+      io.Copy(remote, bytes.NewReader(tcpLayer.LayerPayload()))
+      wg.Done()
+    }()
+    go func() {
+      reply, _ := ioutil.ReadAll(remote)
+      fmt.Println(reply)
+      os.Exit(1)
+      wg.Done()
+    }()
     wg.Wait()
-
+    _ = srcIP
 
   }
-
-
-  /*
-
-  dest := ipv4 + ":" + fmt.Sprintf("%d", port)
-
-  */
 
 }
 
