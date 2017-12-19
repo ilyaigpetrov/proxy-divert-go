@@ -21,7 +21,8 @@ var theInterface *net.Interface
 
 func CreatePacketInjector() (func([]byte) error, error) {
 
-  handle, err := windivert.Open("true", windivert.LayerNetwork, 0, 0)
+  fmt.Println("CREATE INJECTOR")
+  handle, err := windivert.Open("true", windivert.LayerNetwork, 1, 0)
   if err != nil {
     return nil, err
   }
@@ -50,7 +51,7 @@ func CreatePacketInjector() (func([]byte) error, error) {
 
 }
 
-func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (func(), error) {
+func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (func(), func([]byte) error, error) {
 
   excepted := ""
   if len(exceptions) != 0 {
@@ -58,13 +59,13 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
     for _, addr := range exceptions {
       parts := strings.Split(addr, ":")
       if len(parts) != 2 {
-        return nil, errors.New(fmt.Sprintf(`"%s" must be in format hostname:port`, addr))
+        return nil, nil, errors.New(fmt.Sprintf(`"%s" must be in format hostname:port`, addr))
       }
       port := parts[1]
       portless := parts[0]
       ips, err := net.LookupHost(portless)
       if err != nil {
-        return nil, err
+        return nil, nil, err
       }
       ors := make([]string, 0, len(ips))
       for _, ip := range ips {
@@ -80,27 +81,51 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
     excepted +
     DIVERT_NO_LOCALNETS_DST;
 
-  handle, err := windivert.Open(filter, windivert.LayerNetwork, 0, 0)
+  handle, err := windivert.Open(filter, windivert.LayerNetwork, -1, 0)
   if err != nil {
-    return nil, err
+    return nil, nil, err
   }
 
   maxPacketSize := 9016
   packetBuffer := make([]byte, maxPacketSize)
   go func() {
     for {
+      fmt.Println("Calling RECV")
       n, _, err := handle.Recv(packetBuffer)
       if err != nil {
         fmt.Println(err)
         continue
       }
       packetData := packetBuffer[:n]
+      fmt.Println("Calling RECV hANdlerR")
       packetHandler(packetData)
 
     }
   }()
+
+  if theInterface == nil {
+    rif := nettest.RoutedInterface("ip", net.FlagUp)
+    if rif == nil {
+      return nil, nil, errors.New("No interface found for injecting packets.")
+    }
+    theInterface = rif
+    fmt.Println("INTERFACE", rif)
+  }
+
+  addr := windivert.Address{
+    Direction: windivert.DirectionOutbound,
+    IfIdx: uint32(theInterface.Index),
+    SubIfIdx: 0,
+  }
+
   return func() {
     handle.Close()
+  },
+  func(packetData []byte) error {
+
+    _, err = handle.Send(packetData, addr)
+    return err
+
   }, nil
 
 }

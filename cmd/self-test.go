@@ -39,6 +39,7 @@ func packetHandler(packetData []byte) {
   }
   */
 
+  fmt.Println("Got packet, injecting it.")
   err := injectPacket(packetData)
   if err != nil {
     Error.Println(err)
@@ -48,13 +49,17 @@ func packetHandler(packetData []byte) {
 
 func main() {
 
+  /*
   var err error
   injectPacket, err = proxyDivert.CreatePacketInjector()
   if err != nil {
     Error.Fatal(err)
   }
+  */
 
-  unsub, err := proxyDivert.SubscribeToPacketsExcept([]string{}, packetHandler)
+  var unsub func()
+  var err error
+  unsub, injectPacket, err = proxyDivert.SubscribeToPacketsExcept([]string{}, packetHandler)
   if err != nil {
     Error.Fatal(err)
   }
