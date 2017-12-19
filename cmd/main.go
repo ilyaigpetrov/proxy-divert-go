@@ -3,6 +3,7 @@ package main
 import (
   "github.com/ilyaigpetrov/proxy-divert-go"
 
+  "golang.org/x/net/ipv4"
   "path/filepath"
   "fmt"
   "log"
@@ -27,17 +28,65 @@ var Info = log.New(os.Stdout,
 
 var remote net.Conn
 var isDisconnected = make(chan struct{})
+var isConnected = make(chan struct{}, 1)
+
+var injectPacket func([]byte) error
+
+func keepHandlingReply() {
+
+  for {
+    buf := make([]byte, 0, 8186) // big buffer
+    tmp := make([]byte, 4096)     // using small tmo buffer for demonstrating
+    for {
+      n, err := remote.Read(tmp)
+      if err != nil {
+        if err != io.EOF {
+          fmt.Println("read error:", err)
+          isDisconnected <- struct{}{}
+          <-isConnected
+        }
+        break
+      }
+      buf = append(buf, tmp[:n]...)
+      header, err := ipv4.ParseHeader(buf)
+      if err != nil {
+        fmt.Println("Couldn't parse packet, dropping connnection.")
+        break
+      }
+      if header.TotalLen == 0 && len(buf) > 0 {
+        fmt.Println("Buffer is not parserable!")
+        os.Exit(1)
+      }
+      if (header.TotalLen > len(buf)) {
+        fmt.Println("Reading more up to %d\n", header.TotalLen)
+        continue
+      }
+      packetData := buf[0:header.TotalLen]
+      fmt.Println("Injecting packet...")
+      injectPacket(packetData)
+
+      buf = buf[header.TotalLen:]
+    }
+  }
+
+}
 
 func connectTo(serverPoint string) (ifConnected bool) {
 
   fmt.Printf("Dialing %s\n...", serverPoint)
   var err error
+  if remote != nil {
+    remote.Close()
+    remote = nil
+  }
+  fmt.Println("REMOTE REDEFINED")
   remote, err = net.Dial("tcp", serverPoint)
   if err != nil {
     fmt.Println("Can't connect to the server!")
     return false
   }
   fmt.Println("Connected!")
+  isConnected <- struct{}{}
   return true
 
 }
@@ -47,10 +96,9 @@ func keepConnectedTo(serverPoint string) {
   if connectTo(serverPoint) == false {
     Error.Fatal("Failed to stick to this server.")
   }
+  <-isConnected
+  go keepHandlingReply()
   for _ = range isDisconnected {
-    if remote != nil {
-      remote.Close()
-    }
     for {
       ok := connectTo(serverPoint)
       if ok {
@@ -99,7 +147,9 @@ func main() {
 
   serverAddr := os.Args[1]
 
-  unsub, err := proxyDivert.SubscribeToPacketsExcept([]string{serverAddr}, packetHandler)
+  var unsub func()
+  var err error
+  unsub, injectPacket, err = proxyDivert.SubscribeToPacketsExcept([]string{serverAddr}, packetHandler)
   if err != nil {
     Error.Fatal(err)
   }

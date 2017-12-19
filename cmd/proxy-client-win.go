@@ -151,7 +151,8 @@ func (p *Proxy) handle(connection net.TCPConn) {
 
     fmt.Printf("Packet to %s\n", header.Dst)
 
-    var src, dst, srcIP, dstIP string
+    var src, dst string
+    var srcIP, dstIP net.IP
 
     packet := gopacket.NewPacket(packetData, layers.LayerTypeIPv4, gopacket.Default)
     ipLayer := packet.Layer(layers.LayerTypeIPv4)
@@ -159,28 +160,31 @@ func (p *Proxy) handle(connection net.TCPConn) {
         fmt.Println("IPv4 layer detected.")
         ip, _ := ipLayer.(*layers.IPv4)
 
-        src = ip.SrcIP.String()
-        dst = ip.DstIP.String()
-        srcIP = src
-        dstIP = dst
+        srcIP = ip.SrcIP
+        dstIP = ip.DstIP
+        src = srcIP.String()
+        dst = dstIP.String()
     } else {
       fmt.Println("No IP layer!")
       continue
     }
 
+    var srcPort, dstPort layers.TCPPort
     tcpLayer := packet.Layer(layers.LayerTypeTCP)
     if tcpLayer != nil {
         tcp, _ := tcpLayer.(*layers.TCP)
-        dst = fmt.Sprintf("%s:%d", dst, tcp.DstPort)
-        src = fmt.Sprintf("%s:%d", src, tcp.SrcPort)
+        srcPort = tcp.SrcPort
+        dstPort = tcp.DstPort
+        dst = fmt.Sprintf("%s:%d", dst, dstPort)
+        src = fmt.Sprintf("%s:%d", src, srcPort)
     } else {
       fmt.Println("NOT TCP!")
       continue
     }
     fmt.Printf("From %s to %s\n", src, dst)
 
-    if isLocalIP(dstIP) {
-      fmt.Printf("DESTINATION IS SELF: %s\n", dstIP)
+    if isLocalIP(dstIP.String()) {
+      fmt.Printf("DESTINATION IS SELF: %s\n", dstIP.String())
       continue // NO SELF CONNECTIONS
     }
 
@@ -203,13 +207,28 @@ func (p *Proxy) handle(connection net.TCPConn) {
       wg.Done()
     }()
     go func() {
-      reply, _ := ioutil.ReadAll(remote)
-      fmt.Println(reply)
-      os.Exit(1)
+      tcpReply, _ := ioutil.ReadAll(remote)
+
+      options := gopacket.SerializeOptions{
+        ComputeChecksums: true,
+      }
+      replyBuffer := gopacket.NewSerializeBuffer()
+      gopacket.SerializeLayers(replyBuffer, options,
+        &layers.Ethernet{},
+        &layers.IPv4{
+          SrcIP: dstIP,
+          DstIP: srcIP,
+        },
+        &layers.TCP{
+          SrcPort: dstPort,
+          DstPort: srcPort,
+        },
+        gopacket.Payload(tcpReply),
+      )
+      connection.Write(replyBuffer.Bytes())
       wg.Done()
     }()
     wg.Wait()
-    _ = srcIP
 
   }
 

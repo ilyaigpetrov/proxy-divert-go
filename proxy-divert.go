@@ -37,7 +37,7 @@ func CreatePacketInjector() (func([]byte) error, error) {
   }
 
   addr := windivert.Address{
-    Direction: windivert.DirectionOutbound,
+    Direction: windivert.DirectionInbound,
     IfIdx: uint32(theInterface.Index),
     SubIfIdx: 0,
   }
