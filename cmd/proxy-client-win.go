@@ -138,7 +138,7 @@ func (p *Proxy) handle(connection net.TCPConn) {
     }
     if header.TotalLen == 0 && len(buf) > 0 {
       fmt.Println("Buffer is not parserable!")
-      os.Exit(1)
+      return
     }
     if (header.TotalLen > len(buf)) {
       fmt.Println("Reading more up to %d\n", header.TotalLen)
@@ -151,84 +151,88 @@ func (p *Proxy) handle(connection net.TCPConn) {
 
     fmt.Printf("Packet to %s\n", header.Dst)
 
-    var src, dst string
-    var srcIP, dstIP net.IP
+    go func(){
 
-    packet := gopacket.NewPacket(packetData, layers.LayerTypeIPv4, gopacket.Default)
-    ipLayer := packet.Layer(layers.LayerTypeIPv4)
-    if ipLayer != nil {
-        fmt.Println("IPv4 layer detected.")
-        ip, _ := ipLayer.(*layers.IPv4)
+      var src, dst string
+      var srcIP, dstIP net.IP
 
-        srcIP = ip.SrcIP
-        dstIP = ip.DstIP
-        src = srcIP.String()
-        dst = dstIP.String()
-    } else {
-      fmt.Println("No IP layer!")
-      continue
-    }
+      packet := gopacket.NewPacket(packetData, layers.LayerTypeIPv4, gopacket.Default)
+      ipLayer := packet.Layer(layers.LayerTypeIPv4)
+      if ipLayer != nil {
+          fmt.Println("IPv4 layer detected.")
+          ip, _ := ipLayer.(*layers.IPv4)
 
-    var srcPort, dstPort layers.TCPPort
-    tcpLayer := packet.Layer(layers.LayerTypeTCP)
-    if tcpLayer != nil {
-        tcp, _ := tcpLayer.(*layers.TCP)
-        srcPort = tcp.SrcPort
-        dstPort = tcp.DstPort
-        dst = fmt.Sprintf("%s:%d", dst, dstPort)
-        src = fmt.Sprintf("%s:%d", src, srcPort)
-    } else {
-      fmt.Println("NOT TCP!")
-      continue
-    }
-    fmt.Printf("From %s to %s\n", src, dst)
-
-    if isLocalIP(dstIP.String()) {
-      fmt.Printf("DESTINATION IS SELF: %s\n", dstIP.String())
-      continue // NO SELF CONNECTIONS
-    }
-
-    addr, err := net.ResolveTCPAddr("tcp", dst)
-    if err != nil {
-      p.log.Errorln(err)
-      continue
-    }
-    fmt.Printf("Connection to %s\n", dst)
-    remote, err := net.DialTCP("tcp", nil, addr)
-    if err != nil {
-      p.log.WithField("err", err).Errorln("Error dialing remote host")
-      continue
-    }
-    defer remote.Close()
-    wg := &sync.WaitGroup{}
-    wg.Add(2)
-    go func() {
-      io.Copy(remote, bytes.NewReader(tcpLayer.LayerPayload()))
-      wg.Done()
-    }()
-    go func() {
-      tcpReply, _ := ioutil.ReadAll(remote)
-
-      options := gopacket.SerializeOptions{
-        ComputeChecksums: true,
+          srcIP = ip.SrcIP
+          dstIP = ip.DstIP
+          src = srcIP.String()
+          dst = dstIP.String()
+      } else {
+        fmt.Println("No IP layer!")
+        return
       }
-      replyBuffer := gopacket.NewSerializeBuffer()
-      gopacket.SerializeLayers(replyBuffer, options,
-        &layers.Ethernet{},
-        &layers.IPv4{
-          SrcIP: dstIP,
-          DstIP: srcIP,
-        },
-        &layers.TCP{
-          SrcPort: dstPort,
-          DstPort: srcPort,
-        },
-        gopacket.Payload(tcpReply),
-      )
-      connection.Write(replyBuffer.Bytes())
-      wg.Done()
+
+      var srcPort, dstPort layers.TCPPort
+      tcpLayer := packet.Layer(layers.LayerTypeTCP)
+      if tcpLayer != nil {
+          tcp, _ := tcpLayer.(*layers.TCP)
+          srcPort = tcp.SrcPort
+          dstPort = tcp.DstPort
+          dst = fmt.Sprintf("%s:%d", dst, dstPort)
+          src = fmt.Sprintf("%s:%d", src, srcPort)
+      } else {
+        fmt.Println("NOT TCP!")
+        return
+      }
+      fmt.Printf("From %s to %s\n", src, dst)
+
+      if isLocalIP(dstIP.String()) {
+        fmt.Printf("DESTINATION IS SELF: %s\n", dstIP.String())
+        return // NO SELF CONNECTIONS
+      }
+
+      addr, err := net.ResolveTCPAddr("tcp", dst)
+      if err != nil {
+        p.log.Errorln(err)
+        return
+      }
+      fmt.Printf("Connection to %s\n", dst)
+      remote, err := net.DialTCP("tcp", nil, addr)
+      if err != nil {
+        p.log.WithField("err", err).Errorln("Error dialing remote host")
+        return
+      }
+      defer remote.Close()
+      wg := &sync.WaitGroup{}
+      wg.Add(2)
+      go func() {
+        io.Copy(remote, bytes.NewReader(tcpLayer.LayerPayload()))
+        wg.Done()
+      }()
+      go func() {
+        tcpReply, _ := ioutil.ReadAll(remote)
+
+        options := gopacket.SerializeOptions{
+          ComputeChecksums: true,
+        }
+        replyBuffer := gopacket.NewSerializeBuffer()
+        gopacket.SerializeLayers(replyBuffer, options,
+          &layers.Ethernet{},
+          &layers.IPv4{
+            SrcIP: dstIP,
+            DstIP: srcIP,
+          },
+          &layers.TCP{
+            SrcPort: dstPort,
+            DstPort: srcPort,
+          },
+          gopacket.Payload(tcpReply),
+        )
+        connection.Write(replyBuffer.Bytes())
+        wg.Done()
+      }()
+      wg.Wait()
+
     }()
-    wg.Wait()
 
   }
 
