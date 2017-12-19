@@ -3,18 +3,12 @@ package main
 import (
   "github.com/ilyaigpetrov/proxy-divert-go"
 
-  "path/filepath"
   "fmt"
   "log"
-  "time"
-  "bytes"
   "os"
-  "io"
-  //"encoding/hex"
-  "net"
   "os/signal"
-  "github.com/google/gopacket"
-  "github.com/google/gopacket/layers"
+  //"github.com/google/gopacket"
+  //"github.com/google/gopacket/layers"
 )
 
 var Error = log.New(os.Stderr,
@@ -25,49 +19,12 @@ var Info = log.New(os.Stdout,
     "INFO: ",
     log.Ldate|log.Ltime|log.Lshortfile)
 
-var remote net.Conn
-var isDisconnected = make(chan struct{})
 
-func connectTo(serverPoint string) (ifConnected bool) {
-
-  fmt.Printf("Dialing %s\n...", serverPoint)
-  var err error
-  remote, err = net.Dial("tcp", serverPoint)
-  if err != nil {
-    fmt.Println("Can't connect to the server!")
-    return false
-  }
-  fmt.Println("Connected!")
-  return true
-
-}
-
-func keepConnectedTo(serverPoint string) {
-
-  if connectTo(serverPoint) == false {
-    Error.Fatal("Failed to stick to this server.")
-  }
-  for _ = range isDisconnected {
-    if remote != nil {
-      remote.Close()
-    }
-    for {
-      ok := connectTo(serverPoint)
-      if ok {
-        break
-      }
-      fmt.Println("Reconnect in 5 seconds")
-      time.Sleep(time.Second * 5)
-    }
-  }
-
-}
+var injectPacket func([]byte) error
 
 func packetHandler(packetData []byte) {
-  if remote == nil {
-    return
-  }
 
+  /*
   packet := gopacket.NewPacket(packetData, layers.LayerTypeIPv4, gopacket.Default)
   ipLayer := packet.Layer(layers.LayerTypeIPv4)
   if ipLayer != nil {
@@ -80,31 +37,27 @@ func packetHandler(packetData []byte) {
     Error.Println("No IP layer!")
     return
   }
+  */
 
-  var err error
-  _, err = io.Copy(remote, bytes.NewReader(packetData))
+  err := injectPacket(packetData)
   if err != nil {
     Error.Println(err)
-    isDisconnected <- struct{}{}
   }
 
 }
 
 func main() {
 
-  if len(os.Args) != 2 {
-    fmt.Printf("Usage: %s proxy_address:port\n", filepath.Base(os.Args[0]))
-    os.Exit(1)
-  }
-
-  serverAddr := os.Args[1]
-
-  unsub, err := proxyDivert.SubscribeToPacketsExcept([]string{serverAddr}, packetHandler)
+  var err error
+  injectPacket, err = proxyDivert.CreatePacketInjector()
   if err != nil {
     Error.Fatal(err)
   }
 
-  go keepConnectedTo(serverAddr)
+  unsub, err := proxyDivert.SubscribeToPacketsExcept([]string{}, packetHandler)
+  if err != nil {
+    Error.Fatal(err)
+  }
 
   fmt.Println("Traffic diverted.")
 

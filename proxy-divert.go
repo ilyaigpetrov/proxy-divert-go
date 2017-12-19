@@ -6,7 +6,7 @@ import (
   "fmt"
   "errors"
   "github.com/clmul/go-windivert"
-  "experimental/nettest"
+  "github.com/ilyaigpetrov/proxy-divert-go/vendor-local/nettest"
 )
 
 var DIVERT_NO_LOCALNETS_DST = `(
@@ -21,7 +21,7 @@ var theInterface *net.Interface
 
 func CreatePacketInjector() (func([]byte) error, error) {
 
-  handle, err := windivert.Open("false", windivert.LayerNetwork, 0, 0)
+  handle, err := windivert.Open("true", windivert.LayerNetwork, 0, 0)
   if err != nil {
     return nil, err
   }
@@ -32,9 +32,15 @@ func CreatePacketInjector() (func([]byte) error, error) {
       return nil, errors.New("No interface found for injecting packets.")
     }
     theInterface = rif
+    fmt.Println("INTERFACE", rif)
   }
 
-  addr := windivert.Address{ Direction: windivert.DirectionInbound, IfIdx: uint32(theInterface.Index) }
+  addr := windivert.Address{
+    Direction: windivert.DirectionOutbound,
+    IfIdx: uint32(theInterface.Index),
+    SubIfIdx: 0,
+  }
+  fmt.Println("ADDRRRRRR", addr)
   return func(packetData []byte) error {
 
     _, err = handle.Send(packetData, addr)
@@ -46,29 +52,32 @@ func CreatePacketInjector() (func([]byte) error, error) {
 
 func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (func(), error) {
 
-  filters := make([]string, 0, len(exceptions))
-  for _, addr := range exceptions {
-    parts := strings.Split(addr, ":")
-    if len(parts) != 2 {
-      return nil, errors.New(fmt.Sprintf(`"%s" must be in format hostname:port`, addr))
+  excepted := ""
+  if len(exceptions) != 0 {
+    filters := make([]string, 0, len(exceptions))
+    for _, addr := range exceptions {
+      parts := strings.Split(addr, ":")
+      if len(parts) != 2 {
+        return nil, errors.New(fmt.Sprintf(`"%s" must be in format hostname:port`, addr))
+      }
+      port := parts[1]
+      portless := parts[0]
+      ips, err := net.LookupHost(portless)
+      if err != nil {
+        return nil, err
+      }
+      ors := make([]string, 0, len(ips))
+      for _, ip := range ips {
+        f := fmt.Sprintf("ip.DstAddr != %s", ip)
+        ors = append(ors, f)
+      }
+      filters = append(filters, "(" + strings.Join(ors, " or ") + ") and tcp.DstPort != " + port)
     }
-    port := parts[1]
-    portless := parts[0]
-    ips, err := net.LookupHost(portless)
-    if err != nil {
-      return nil, err
-    }
-    ors := make([]string, 0, len(ips))
-    for _, ip := range ips {
-      f := fmt.Sprintf("ip.DstAddr != %s", ip)
-      ors = append(ors, f)
-    }
-    filters = append(filters, "(" + strings.Join(ors, " or ") + ") and tcp.DstPort != " + port)
+    excepted = "(" + strings.Join(filters, ") and (") + ") and "
   }
-  excepted := "(" + strings.Join(filters, ") and (") + ")"
 
   filter := "outbound and ip and tcp and (tcp.DstPort == 443 or tcp.DstPort == 80) and " +
-    excepted + " and " +
+    excepted +
     DIVERT_NO_LOCALNETS_DST;
 
   handle, err := windivert.Open(filter, windivert.LayerNetwork, 0, 0)
